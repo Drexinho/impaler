@@ -15,6 +15,7 @@ final class Picker {
         for screen in NSScreen.screens {
             let window = OverlayWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
             window.level = .screenSaver
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.isOpaque = false
             window.backgroundColor = NSColor(white: 0, alpha: 0.05)  // ne zcela průhledné, jinak by kliky propadly
             window.isReleasedWhenClosed = false
