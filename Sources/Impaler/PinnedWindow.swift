@@ -7,13 +7,16 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePo
 /// Připnuté okno: sleduje ho přes AX a když není fokusované, překryje ho živým zrcadlem v úrovni .floating.
 @MainActor
 final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
-    private let windowID: CGWindowID
+    let windowID: CGWindowID
     private let pid: pid_t
     private let axApp: AXUIElement
     private let axWindow: AXUIElement
     private let onUnpin: (String?) -> Void  // zpráva = odepnuto kvůli chybě
-    private let mirror = PinnedWindow.panel(level: .floating)
-    private let badge = PinnedWindow.panel(level: NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1))
+    private let onShow: () -> Void  // zrcadlo se má nově zobrazit: AppDelegate přerovná vrstvy
+    private let mirror = PinnedWindow.panel()
+    private let badge = PinnedWindow.panel()
+    private var mirrorShown = false  // má být zrcadlo vidět (zobrazuje ho až raise())
+    private var shadowSize = CGSize.zero
     private var observer: AXObserver?
     private var stream: SCStream?
     private var scale: CGFloat = 2
@@ -29,7 +32,7 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         didSet { allPanels.allObjects.forEach { $0.ignoresMouseEvents = handoffs > 0 } }
     }
 
-    init?(windowID: CGWindowID, pid: pid_t, bounds: CGRect, onUnpin: @escaping (String?) -> Void) {
+    init?(windowID: CGWindowID, pid: pid_t, bounds: CGRect, onShow: @escaping () -> Void, onUnpin: @escaping (String?) -> Void) {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.25)  // zaseknutá aplikace nesmí zablokovat Impaler
         var value: CFTypeRef?
@@ -45,6 +48,7 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         self.axApp = app
         self.axWindow = window
         self.onUnpin = onUnpin
+        self.onShow = onShow
         super.init()
 
         let mirrorView = ClickView()
@@ -95,6 +99,13 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         return [CGWindowID(mirror.windowNumber): target, CGWindowID(badge.windowNumber): target]
     }
 
+    /// Dá dopředu zrcadlo (jen když má být vidět) a hned nad něj odznak; volá AppDelegate.restack().
+    func raise() {
+        guard !closed else { return }
+        if mirrorShown { mirror.orderFrontRegardless() }
+        badge.orderFrontRegardless()
+    }
+
     func close() {
         guard !closed else { return }
         closed = true
@@ -134,11 +145,11 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         let height = NSScreen.screens[0].frame.height  // převod CG (počátek vlevo nahoře) → AppKit
         mirror.setFrame(CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height), display: false)
         badge.setFrame(CGRect(x: frame.maxX - 24, y: height - frame.minY - 24, width: 20, height: 20), display: true)
-        badge.orderFrontRegardless()
-        if !hasFrame || handoff != nil || isFocused {
-            mirror.orderOut(nil)
-        } else if !mirror.isVisible {  // jen při návratu, ať se pořadí zrcadel nemíchá: naposledy vrácené je navrchu
-            mirror.orderFrontRegardless()
+        let show = hasFrame && handoff == nil && !isFocused
+        if !show { mirror.orderOut(nil) }
+        if show != mirrorShown {
+            mirrorShown = show
+            if show { onShow() }  // pořadí vrstev určuje priorita, ne okamžik zobrazení
         }
         if frame.size != size {
             size = frame.size
@@ -155,6 +166,7 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         let mouse = NSEvent.mouseLocation  // bod kliku relativně k oknu (CG souřadnice)
         let offset = CGPoint(x: mouse.x - origin.minX, y: NSScreen.screens[0].frame.height - mouse.y - origin.minY)
         mirror.orderOut(nil)
+        mirrorShown = false
         NSRunningApplication(processIdentifier: pid)?.activate()
         AXUIElementSetAttributeValue(axApp, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
@@ -190,6 +202,10 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         configuration.showsCursor = false
         configuration.ignoreShadowsSingleWindow = true
+        // Zaoblené rohy okna mají zůstat průhledné: formát s alfa kanálem, čiré pozadí, žádná bílá podkladová výplň.
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.backgroundColor = .clear
+        configuration.shouldBeOpaque = false
         return configuration
     }
 
@@ -233,6 +249,10 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
                 hasFrame = true
                 update()
             }
+            if shadowSize != mirror.frame.size {  // první snímek a změna velikosti: stín se odvozuje z alfa kanálu
+                shadowSize = mirror.frame.size
+                mirror.invalidateShadow()
+            }
         }
     }
 
@@ -256,9 +276,9 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         return rect
     }
 
-    private static func panel(level: NSWindow.Level) -> NSPanel {
+    private static func panel() -> NSPanel {
         let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.level = level
+        panel.level = .floating  // zrcadla i odznaky ve stejné úrovni; pořadí řídí AppDelegate.restack()
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false

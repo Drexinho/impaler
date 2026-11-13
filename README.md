@@ -39,8 +39,8 @@ tccutil reset ScreenCapture eu.drexinho.impaler
 ## Usage
 
 - Click the pin in the menu bar and choose **Připnout okno** (pin a window). Move the mouse over a window, which gets a blue outline, and click. Esc cancels.
-- Repeat to pin more windows. Each pinned window is listed in the menu.
-- A pinned window carries a 📌 badge in its top-right corner. Click the badge, or the window's entry in the menu, to unpin it. **Odepnout vše** unpins everything.
+- Repeat to pin more windows. The menu lists them in priority order: the first one is always in front of the others. Each entry has a submenu with **Posunout nahoru** (move up), **Posunout dolů** (move down) and **Odepnout** (unpin).
+- A pinned window carries a 📌 badge in its top-right corner. Click the badge to unpin it. **Odepnout vše** unpins everything.
 
 ## How it works
 
