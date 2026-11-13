@@ -41,15 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let show = badge.addItem(withTitle: "Zobrazovat", action: #selector(toggleBadge), keyEquivalent: "")
         show.target = self
         show.state = BadgeSettings.hidden ? .off : .on
-        for (titles, action, current) in [(["Vpravo nahoře", "Uprostřed nahoře", "Vlevo nahoře"], #selector(setBadgePosition), BadgeSettings.position),
-                                          (["Červený", "Bílý", "Černý"], #selector(setBadgeColor), BadgeSettings.color)] {
-            badge.addItem(.separator())
-            for (tag, title) in titles.enumerated() {
-                let item = badge.addItem(withTitle: title, action: action, keyEquivalent: "")
-                item.target = self
-                item.tag = tag
-                item.state = tag == current ? .on : .off
-            }
+        badge.addItem(.separator())
+        for (left, title) in [(false, "Vpravo"), (true, "Vlevo")] {
+            let item = badge.addItem(withTitle: title, action: #selector(setBadgeSide), keyEquivalent: "")
+            item.target = self
+            item.tag = left ? 1 : 0
+            item.state = left == BadgeSettings.left ? .on : .off
         }
         menu.addItem(withTitle: "Odznak", action: nil, keyEquivalent: "").submenu = badge
         menu.addItem(.separator())
@@ -100,13 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applyBadge()
     }
 
-    @objc private func setBadgePosition(_ sender: NSMenuItem) {
-        BadgeSettings.position = sender.tag
-        applyBadge()
-    }
-
-    @objc private func setBadgeColor(_ sender: NSMenuItem) {
-        BadgeSettings.color = sender.tag
+    @objc private func setBadgeSide(_ sender: NSMenuItem) {
+        BadgeSettings.left = sender.tag == 1
         applyBadge()
     }
 

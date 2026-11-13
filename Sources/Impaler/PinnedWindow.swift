@@ -4,22 +4,16 @@ import ScreenCaptureKit
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
 
-/// Nastavení odznaku v UserDefaults; výchozí hodnoty (false, 0, 0) = zobrazovat, vpravo nahoře, červený 📌.
+/// Nastavení odznaku v UserDefaults; výchozí hodnoty (false, false) = zobrazovat, vpravo nahoře.
 @MainActor
 enum BadgeSettings {
     static var hidden: Bool {
         get { UserDefaults.standard.bool(forKey: "badgeHidden") }
         set { UserDefaults.standard.set(newValue, forKey: "badgeHidden") }
     }
-    /// 0 = vpravo nahoře, 1 = uprostřed nahoře, 2 = vlevo nahoře
-    static var position: Int {
-        get { UserDefaults.standard.integer(forKey: "badgePosition") }
-        set { UserDefaults.standard.set(newValue, forKey: "badgePosition") }
-    }
-    /// 0 = červený (📌), 1 = bílý, 2 = černý
-    static var color: Int {
-        get { UserDefaults.standard.integer(forKey: "badgeColor") }
-        set { UserDefaults.standard.set(newValue, forKey: "badgeColor") }
+    static var left: Bool {
+        get { UserDefaults.standard.bool(forKey: "badgeLeft") }
+        set { UserDefaults.standard.set(newValue, forKey: "badgeLeft") }
     }
 }
 
@@ -125,10 +119,9 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         if !BadgeSettings.hidden { badge.orderFrontRegardless() }
     }
 
-    /// Změnilo se nastavení odznaku: skrýt, překreslit, přepočítat pozici (zobrazení řeší restack přes raise()).
+    /// Změnilo se nastavení odznaku: skrýt a přepočítat pozici (zobrazení řeší restack přes raise()).
     func badgeChanged() {
         if BadgeSettings.hidden { badge.orderOut(nil) }
-        badge.contentView?.needsDisplay = true
         update()
     }
 
@@ -171,7 +164,7 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         let height = NSScreen.screens[0].frame.height  // převod CG (počátek vlevo nahoře) → AppKit
         mirror.setFrame(CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height), display: false)
         // Pozice odznaku (jediné místo): vlevo až za semaforovými tlačítky; nikdy mimo rám okna.
-        let x = [frame.maxX - 24, frame.midX - 10, frame.minX + 78][min(max(BadgeSettings.position, 0), 2)]
+        let x = BadgeSettings.left ? frame.minX + 78 : frame.maxX - 24
         badge.setFrame(CGRect(x: max(frame.minX, min(x, frame.maxX - 20)), y: height - frame.minY - 24, width: 20, height: 20), display: true)
         let show = hasFrame && handoff == nil && !isFocused
         if !show { mirror.orderOut(nil) }
@@ -326,13 +319,6 @@ private class ClickView: NSView {
 
 private final class BadgeView: ClickView {
     override func draw(_ dirtyRect: NSRect) {
-        guard BadgeSettings.color != 0 else {
-            return ("📌" as NSString).draw(in: bounds, withAttributes: [.font: NSFont.systemFont(ofSize: 14)])
-        }
-        let configuration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-            .applying(.init(paletteColors: [BadgeSettings.color == 1 ? .white : .black]))
-        guard let image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: nil)?.withSymbolConfiguration(configuration) else { return }
-        image.draw(in: CGRect(x: bounds.midX - image.size.width / 2, y: bounds.midY - image.size.height / 2,
-                              width: image.size.width, height: image.size.height))
+        ("📌" as NSString).draw(in: bounds, withAttributes: [.font: NSFont.systemFont(ofSize: 14)])
     }
 }
