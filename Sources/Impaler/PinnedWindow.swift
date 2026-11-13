@@ -73,6 +73,21 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { await startStream() }
     }
 
+    /// Popisek do menu: „Název aplikace – titulek okna“.
+    var title: String {
+        let app = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &value)
+        guard let title = value as? String, !title.isEmpty else { return app }
+        return app + " – " + (title.count > 40 ? title.prefix(39) + "…" : title)
+    }
+
+    /// Čísla oken zrcadla a odznaku → toto připnuté okno (pro picker).
+    var panels: [CGWindowID: Picker.Target] {
+        let target = (id: windowID, pid: pid, bounds: Self.frame(of: axWindow) ?? .zero)
+        return [CGWindowID(mirror.windowNumber): target, CGWindowID(badge.windowNumber): target]
+    }
+
     func close() {
         guard !closed else { return }
         closed = true
@@ -113,7 +128,11 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         mirror.setFrame(CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height), display: false)
         badge.setFrame(CGRect(x: frame.maxX - 24, y: height - frame.minY - 24, width: 20, height: 20), display: true)
         badge.orderFrontRegardless()
-        if !hasFrame || handoff != nil || isFocused { mirror.orderOut(nil) } else { mirror.orderFrontRegardless() }
+        if !hasFrame || handoff != nil || isFocused {
+            mirror.orderOut(nil)
+        } else if !mirror.isVisible {  // jen při návratu, ať se pořadí zrcadel nemíchá: naposledy vrácené je navrchu
+            mirror.orderFrontRegardless()
+        }
         if frame.size != size {
             size = frame.size
             if let stream {

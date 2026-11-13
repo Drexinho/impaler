@@ -8,9 +8,11 @@ final class Picker {
     private var windows: [NSWindow] = []
     private var escMonitor: Any?
     private var target: Target?
+    private let panels: [CGWindowID: Target]  // zrcadla a odznaky Impaleru → jejich připnuté okno
     private let done: (Target?) -> Void
 
-    init(done: @escaping (Target?) -> Void) {
+    init(panels: [CGWindowID: Target], done: @escaping (Target?) -> Void) {
+        self.panels = panels
         self.done = done
         for screen in NSScreen.screens {
             let window = OverlayWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -42,11 +44,15 @@ final class Picker {
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         target = nil
         for info in list {  // seznam je seřazen odshora dolů
-            guard info[kCGWindowLayer as String] as? Int == 0,
-                  let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != getpid(),
+            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t,
                   let id = info[kCGWindowNumber as String] as? CGWindowID,
                   let dict = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: dict), bounds.contains(point) else { continue }
+            if let pinned = panels[id] {  // pod kurzorem je zrcadlo nebo odznak: platí jako připnuté okno
+                target = pinned
+                break
+            }
+            guard info[kCGWindowLayer as String] as? Int == 0, pid != getpid() else { continue }
             target = (id, pid, bounds)
             break
         }
