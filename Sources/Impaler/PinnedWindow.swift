@@ -22,6 +22,13 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
     private var hasFrame = false  // zrcadlo se ukáže až s prvním kompletním snímkem
     private var handoff: Task<Void, Never>?  // běžící předání kliku ze zrcadla
 
+    /// Panely všech připnutých oken; dokud běží nějaké předání kliku, jsou pro myš průchozí,
+    /// aby syntetický klik nedopadl do cizího zrcadla nebo odznaku.
+    private static let allPanels = NSHashTable<NSPanel>.weakObjects()
+    private static var handoffs = 0 {
+        didSet { allPanels.allObjects.forEach { $0.ignoresMouseEvents = handoffs > 0 } }
+    }
+
     init?(windowID: CGWindowID, pid: pid_t, bounds: CGRect, onUnpin: @escaping (String?) -> Void) {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.25)  // zaseknutá aplikace nesmí zablokovat Impaler
@@ -151,7 +158,9 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         NSRunningApplication(processIdentifier: pid)?.activate()
         AXUIElementSetAttributeValue(axApp, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
+        Self.handoffs += 1
         handoff = Task {
+            defer { Self.handoffs -= 1 }  // při každém konci předání, i při zrušení v close()
             var focused = false
             for _ in 0..<25 where !focused {  // nejdéle ~500 ms
                 try? await Task.sleep(for: .milliseconds(20))
@@ -164,6 +173,8 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
                 for type in frame.contains(point) ? [CGEventType.leftMouseDown, .leftMouseUp] : [] {
                     CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
                 }
+                try? await Task.sleep(for: .milliseconds(100))  // panely zůstanou průchozí, než klik dorazí
+                if Task.isCancelled || closed { return }
             }
             handoff = nil
             update()  // při neúspěchu se zrcadlo vrátí a klik se zahodí
@@ -253,6 +264,8 @@ final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.ignoresMouseEvents = handoffs > 0
+        allPanels.add(panel)
         return panel
     }
 }
