@@ -37,6 +37,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(withTitle: "Odepnout vše", action: #selector(unpinAll), keyEquivalent: "").target = self
         }
         menu.addItem(.separator())
+        let badge = NSMenu()
+        let show = badge.addItem(withTitle: "Zobrazovat", action: #selector(toggleBadge), keyEquivalent: "")
+        show.target = self
+        show.state = BadgeSettings.hidden ? .off : .on
+        for (titles, action, current) in [(["Vpravo nahoře", "Uprostřed nahoře", "Vlevo nahoře"], #selector(setBadgePosition), BadgeSettings.position),
+                                          (["Červený", "Bílý", "Černý"], #selector(setBadgeColor), BadgeSettings.color)] {
+            badge.addItem(.separator())
+            for (tag, title) in titles.enumerated() {
+                let item = badge.addItem(withTitle: title, action: action, keyEquivalent: "")
+                item.target = self
+                item.tag = tag
+                item.state = tag == current ? .on : .off
+            }
+        }
+        menu.addItem(withTitle: "Odznak", action: nil, keyEquivalent: "").submenu = badge
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Ukončit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
@@ -77,6 +93,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Vrstvení podle priority: od nejnižší po nejvyšší dá dopředu zrcadlo a nad něj jeho odznak.
     private func restack() {
         pinned.reversed().forEach { $0.raise() }
+    }
+
+    @objc private func toggleBadge() {
+        BadgeSettings.hidden.toggle()
+        applyBadge()
+    }
+
+    @objc private func setBadgePosition(_ sender: NSMenuItem) {
+        BadgeSettings.position = sender.tag
+        applyBadge()
+    }
+
+    @objc private func setBadgeColor(_ sender: NSMenuItem) {
+        BadgeSettings.color = sender.tag
+        applyBadge()
+    }
+
+    /// Změna nastavení odznaku se hned projeví u všech připnutých oken.
+    private func applyBadge() {
+        pinned.forEach { $0.badgeChanged() }
+        restack()
     }
 
     private func move(_ sender: NSMenuItem, by delta: Int) {
