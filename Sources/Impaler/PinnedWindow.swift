@@ -6,7 +6,7 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePo
 
 /// Připnuté okno: sleduje ho přes AX a když není fokusované, překryje ho živým zrcadlem v úrovni .floating.
 @MainActor
-final class PinnedWindow: NSObject, SCStreamOutput {
+final class PinnedWindow: NSObject, SCStreamOutput, SCStreamDelegate {
     private let windowID: CGWindowID
     private let pid: pid_t
     private let axApp: AXUIElement
@@ -19,10 +19,12 @@ final class PinnedWindow: NSObject, SCStreamOutput {
     private var scale: CGFloat = 2
     private var size = CGSize.zero
     private var closed = false
+    private var hasFrame = false  // zrcadlo se ukáže až s prvním kompletním snímkem
     private var handoff: Task<Void, Never>?  // běžící předání kliku ze zrcadla
 
     init?(windowID: CGWindowID, pid: pid_t, bounds: CGRect, onUnpin: @escaping (String?) -> Void) {
         let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.25)  // zaseknutá aplikace nesmí zablokovat Impaler
         var value: CFTypeRef?
         AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
         let candidates = value as? [AXUIElement] ?? []
@@ -30,6 +32,7 @@ final class PinnedWindow: NSObject, SCStreamOutput {
             var id = CGWindowID(0)
             return _AXUIElementGetWindow($0, &id) == .success && id == windowID
         }) ?? candidates.first(where: { Self.frame(of: $0) == bounds }) else { return nil }
+        AXUIElementSetMessagingTimeout(window, 0.25)
         self.windowID = windowID
         self.pid = pid
         self.axApp = app
@@ -110,7 +113,7 @@ final class PinnedWindow: NSObject, SCStreamOutput {
         mirror.setFrame(CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height), display: false)
         badge.setFrame(CGRect(x: frame.maxX - 24, y: height - frame.minY - 24, width: 20, height: 20), display: true)
         badge.orderFrontRegardless()
-        if isFocused || handoff != nil { mirror.orderOut(nil) } else { mirror.orderFrontRegardless() }
+        if !hasFrame || handoff != nil || isFocused { mirror.orderOut(nil) } else { mirror.orderFrontRegardless() }
         if frame.size != size {
             size = frame.size
             if let stream {
@@ -122,9 +125,9 @@ final class PinnedWindow: NSObject, SCStreamOutput {
 
     /// Klik do zrcadla: vynes reálné okno dopředu a klik zopakuj, až když má prokazatelně fokus.
     private func clickThrough() {
-        guard handoff == nil else { return }
-        let mouse = NSEvent.mouseLocation
-        let point = CGPoint(x: mouse.x, y: NSScreen.screens[0].frame.height - mouse.y)
+        guard handoff == nil, let origin = Self.frame(of: axWindow) else { return }
+        let mouse = NSEvent.mouseLocation  // bod kliku relativně k oknu (CG souřadnice)
+        let offset = CGPoint(x: mouse.x - origin.minX, y: NSScreen.screens[0].frame.height - mouse.y - origin.minY)
         mirror.orderOut(nil)
         NSRunningApplication(processIdentifier: pid)?.activate()
         AXUIElementSetAttributeValue(axApp, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
@@ -136,8 +139,10 @@ final class PinnedWindow: NSObject, SCStreamOutput {
                 if Task.isCancelled || closed { return }
                 focused = isFocused
             }
-            if focused {
-                for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+            // Okno se mezitím mohlo posunout: bod se přepočítá, při změně velikosti se klik zahodí.
+            if focused, let frame = Self.frame(of: axWindow), frame.size == origin.size {
+                let point = CGPoint(x: frame.minX + offset.x, y: frame.minY + offset.y)
+                for type in frame.contains(point) ? [CGEventType.leftMouseDown, .leftMouseUp] : [] {
                     CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
                 }
             }
@@ -168,7 +173,7 @@ final class PinnedWindow: NSObject, SCStreamOutput {
             let filter = SCContentFilter(desktopIndependentWindow: window)
             scale = CGFloat(filter.pointPixelScale)
             let started = size
-            let stream = SCStream(filter: filter, configuration: makeConfiguration(), delegate: nil)
+            let stream = SCStream(filter: filter, configuration: makeConfiguration(), delegate: self)
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: .main)
             try await stream.startCapture()
             if closed {  // odepnuto během startu: zastav až teď, po dokončeném startu
@@ -187,9 +192,25 @@ final class PinnedWindow: NSObject, SCStreamOutput {
     }
 
     nonisolated func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, let buffer = sampleBuffer.imageBuffer,
+        guard type == .screen,
+              let info = (CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]])?.first,
+              let status = info[.status] as? Int, SCFrameStatus(rawValue: status) == .complete,
+              let buffer = sampleBuffer.imageBuffer,
               let surface = CVPixelBufferGetIOSurface(buffer)?.takeUnretainedValue() else { return }
-        MainActor.assumeIsolated { mirror.contentView?.layer?.contents = surface }  // sampleHandlerQueue je .main
+        MainActor.assumeIsolated {  // sampleHandlerQueue je .main
+            mirror.contentView?.layer?.contents = surface
+            if !hasFrame {
+                hasFrame = true
+                update()
+            }
+        }
+    }
+
+    /// Stream skončil sám (uživatel ukončil sdílení, chyba snímání): odepnout, ať nezůstane zamrzlé zrcadlo.
+    nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
+        Task { @MainActor in
+            if !closed { onUnpin("Zachytávání okna bylo ukončeno.") }
+        }
     }
 
     // MARK: Pomocné
@@ -212,6 +233,7 @@ final class PinnedWindow: NSObject, SCStreamOutput {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         return panel
     }
 }
